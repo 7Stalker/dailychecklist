@@ -3,7 +3,7 @@ from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import database as db
 from keyboards import get_habit_keyboard, HabitCallback
@@ -16,25 +16,26 @@ class HabitForm(StatesGroup):
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
+    
     # YANGI: Foydalanuvchini ro'yxatga olamiz
     full_name = message.from_user.full_name
     username = message.from_user.username or "yo'q"
     await db.add_user(user_id, full_name, username)
-    habits = await db.get_habits(user_id)
     
+    habits = await db.get_habits(user_id)
     
     total = len(habits)
     done = sum(1 for h in habits if h['is_done'])
     percent = int((done / total) * 100) if total > 0 else 0
     
     text = (
-        f"👋 Assalomu alaykum, {message.from_user.full_name}!\n"
+        f"👋 Assalomu alaykum, {full_name}!\n"
         f"Bugungi natijangiz: <b>{percent}%</b>\n\n"
         "📋 <b>Sizning odatlaringiz:</b>"
     )
     await message.answer(text, reply_markup=get_habit_keyboard(habits))
 
-# --- Statistika (YANGI) ---
+# --- Statistika ---
 @router.callback_query(F.data == "stats")
 async def show_stats(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -60,17 +61,17 @@ async def show_stats(callback: types.CallbackQuery):
         text += "Ma'lumot yo'q."
         
     # Orqaga qaytish tugmasi
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     back_btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_home")]])
     
     await callback.message.edit_text(text, reply_markup=back_btn)
 
 @router.callback_query(F.data == "back_home")
 async def go_home(callback: types.CallbackQuery):
+    # Orqaga qaytishda xabarni yangilash emas, yangidan start berish osonroq
+    await callback.message.delete()
     await cmd_start(callback.message)
 
-# ... (Qolgan kodlar o'zgarishsiz qoladi: add_new, save_habit, toggle, delete) ...
-
+# --- Yangi odat qo'shish ---
 @router.callback_query(F.data == "add_new")
 async def ask_habit_name(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("✍️ Yangi odat nomini yozing:")
@@ -84,11 +85,16 @@ async def save_habit(message: types.Message, state: FSMContext):
     await state.clear()
     await cmd_start(message)
 
+# --- Odatlarni belgilash va o'chirish ---
 @router.callback_query(HabitCallback.filter())
 async def handle_habit_action(callback: types.CallbackQuery, callback_data: HabitCallback):
     user_id = callback.from_user.id
+    
     if callback_data.action == "toggle":
         await db.toggle_habit_status(callback_data.id, user_id)
+        # MUHIM: Tugma ustidagi soat aylanib qotib qolmasligi uchun:
+        await callback.answer()
+        
     elif callback_data.action == "delete":
         await db.delete_habit(callback_data.id, user_id)
         await callback.answer("O'chirildi!", show_alert=True)
@@ -105,6 +111,11 @@ async def handle_habit_action(callback: types.CallbackQuery, callback_data: Habi
         "📋 <b>Sizning odatlaringiz:</b>"
     )
     
+    try:
+        await callback.message.edit_text(text, reply_markup=get_habit_keyboard(habits))
+    except Exception:
+        pass
+
 # --- ADMIN PANEL ---
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
@@ -125,8 +136,3 @@ async def cmd_admin(message: types.Message):
         text += f"🔹 {u['full_name']} ({uname}) - ID: <code>{u['user_id']}</code>\n"
         
     await message.answer(text)
-    
-    try:
-        await callback.message.edit_text(text, reply_markup=get_habit_keyboard(habits))
-    except Exception:
-        pass
